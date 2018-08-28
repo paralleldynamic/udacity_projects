@@ -1,0 +1,501 @@
+Exploration of Prosper Loan Data by Patrick Spears
+========================================================
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, packages}
+# Load all of the packages that you end up using in your analysis in this code
+# chunk.
+
+# Notice that the parameter "echo" was set to FALSE for this code chunk. This
+# prevents the code from displaying in the knitted HTML output. You should set
+# echo=FALSE for all code chunks in your file, unless it makes sense for your
+# report to show the code that generated a particular plot.
+
+# The other parameters for "message" and "warning" should also be set to FALSE
+# for other code chunks once you have verified that each plot comes out as you
+# want it to. This will clean up the flow of your report.
+
+library(ggplot2)
+library(GGally)
+library(lubridate)
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+```{r echo=FALSE, Load_the_Data}
+# Load the Data
+setwd("~/development/udacity_projects/DataAnalyst/T2/P1/ExploreAndSummarizeData")
+loans <- read.csv("data/prosperLoanData.csv", stringsAsFactors = FALSE)
+
+```
+
+I will be exploring the Prosper loan data set, a collection of loans made through the fintech company Prosper.  Prosper describes itself as a peer-to-peer lending platform (or "marketplace"): according to the "About Us" section of the website, "individuals and institutions can invest in loans and earn attractive returns."
+
+The dataset includes 81 attributes and just shy of 114,000 records. Many of the attributes are factors or otherwise categorical, and many attributes are missing data or inconsistent between records.  To me, this is indicative of underlying changes in Prosper's spplication(s) or database(s) over time. Some qualifying evidence for that statement is the relationship between origination year and the alpha Prosper rating: before 2009, the attribute was not in use, so all of those records have a null value for this attribute.
+
+Prosper has provided a data dictionary for data available through their [API services](https://www.prosper.com/Downloads/Services/Documentation/ProsperDataExport_Details.html). I used the definitions to identify several attributes of the dataset to start my investigation.
+
+* TotalProsperLoans: who uses Prosper? It's a new(ish) product, but are people coming back?
+* BorrowerAPR / BorrowerRate: APR is a calculation of the rate plus fees, so these should be similar attributes.
+* ProsperScore / ProsperRating: how are people rated on the platform?  How does it affect the APR?
+* MonthlyLoanPayment: how much are people paying?  
+* Investors: kind of a wildcard, but the major selling point of the platform seems to be to have your loan outsourced to multiple investing partners -- rather than securing a single investor or bank for your loan.  Does this hold up?
+* Term: as an attribute of a loan, term will typically influence both the monthly loan payment and APR
+* LoanOriginationAmount: how much are people borrowing?
+
+
+To correct some deficiencies in the data, I'll be performing some data wrangling to clean the data. The first place I'll start is with the  Income Range attribute isn't ordered nicely, so let's restructure it to be more interpretable. I'll do the same with the Prosper Rating. I'm ordering these so that they show from least to greatest, with null or otherwise empty data as the tail. I'll sort the borrower state alphabetically.
+
+```{r echo = TRUE, Wrangle_Factor_Data}
+
+loans$IncomeRange <- factor(loans$IncomeRange, levels = 
+                          levels(factor(loans$IncomeRange))[c(1,2,4,5,6,3,8,7)])
+
+loans$ProsperRating..Alpha. <- sub("^$", "NA", loans$ProsperRating..Alpha.)
+
+loans$ProsperRating..Alpha. <- factor(loans$ProsperRating..Alpha., levels = 
+                          levels(factor(loans$ProsperRating..Alpha.))[c(8, 7, 6, 5, 4, 3, 1, 2)])
+
+loans$BorrowerState <- factor(loans$BorrowerState, levels = 
+                                sort(unique(loans$BorrowerState))[c(2:52,1)])
+
+```
+
+Additionally, I want to replace some missing data and convert data types. Total Prosper Loans are Null for any borrower that didn't have a previous loan, but I'd like to see those as '0'. Origination date should be in a date typ rather than a character, both because it's useful and because, coming from a database background, the deep sense of inner purity it leaves me with.
+
+```{r echo = TRUE, Fix_Bad_Formatting}
+
+loans$TotalProsperLoans[is.na(loans$TotalProsperLoans)] <- 0
+
+loans$LoanOriginationDate <- as.Date(loans$LoanOriginationDate, "%Y-%m-%d %H:%M:%S")
+
+```
+
+# Univariate Plots Section
+## Loan "Demographics"
+### Total Prosper Loans
+
+```{r echo=FALSE, TotalProsperLoans_Counts}
+
+ggplot(data=loans, aes(TotalProsperLoans)) +
+  geom_bar()
+
+table(loans$TotalProsperLoans)
+
+```
+
+We can see that the overwhelming majority of loans on the Prosper platform are the first loan on the platform, but I'd be interested to see if the number of repeat customers over time increases.
+
+```{r echo=FALSE, TotalProsperLoans_By_LoanOriginationDate}
+
+ggplot(data=loans, aes(year(LoanOriginationDate))) +
+    geom_bar(aes(fill = as.character(loans$TotalProsperLoans))) +
+    labs(fill = "Total Loans", x = "Origination Date")
+
+```
+
+It looks like people are coming back for loans as time goes on. This question would be a good for further exploration of the data: is there a meaningful difference between the growth of return clients and new clients?
+
+### Grading and Scoring Borrowers
+
+```{r echo=FALSE}
+
+ggplot(loans, aes(CreditScoreRangeLower)) +
+  geom_histogram(binwidth = 5)
+
+unique(loans$CreditScoreRangeLower)
+
+unique(loans$CreditScoreRangeUpper - loans$CreditScoreRangeLower)
+
+```
+
+I thought credit score might be an interesting attribute to use in deeper analysis, but after examining the actual values I'm... unimpressed with its usefulness. Every loan is masked by providing a credit score in a 19 point range.  In retrospect, that makes sense; it helps make the individual record harder to be personally identifying. The default binwidth of 30 obscures the discrete nature of the scores in the data, but when you adjust the binwidth to something more reasonable (in this case, 5), you can see that the values are masked. Despite this, an shape approximating normal emerges.
+
+```{r echo=FALSE}
+
+ggplot(loans, aes(ProsperScore)) +
+  geom_bar()
+
+```
+
+```{r echo=FALSE}
+
+ggplot(loans, aes(ProsperRating..Alpha.)) +
+  geom_bar()
+
+```
+
+I was interested in a two other, possibly related attributes: Prosper score and Prosper rating.  They have similar counts and shapes, fairly normalized -- when you ignore the fact that there's a massive pile of people without Prosper ratings. After some digging, it looks like the alpha Prosper score wasn't put into use until 2009.
+
+```{r echo=FALSE, No_ProsperRating_Before_2009}
+
+ggplot(data=loans, aes(year(LoanOriginationDate))) +
+    geom_bar(aes(fill = as.character(loans$ProsperRating..Alpha.))) +
+    labs(fill = "Total Loans", x = "Origination Date")
+```
+
+Although a garish, this chart demonstrates the split in the dataset: in 2009, Prosper switched to this rating model. The switch suggests an interesting problem for how to handle the data. Should entities prior to 2009 be dropped?
+
+Like an insane Physics teacher that grades on a curve to force the world into their mathematical model, these three attributes have approximately normal distributions.  This similarity speaks to something in the way people are treated and classified by major financial institutions, though the ethics of arbitrarily assigning people to a manufactured normal distribution is probably the subject of a policy piece than an EDA project for a MOOC.
+
+```{r echo=FALSE}
+
+ggplot(loans, aes(ProsperScore)) +
+  geom_bar(aes(fill = as.character(loans$TotalProsperLoans)))
+
+```
+
+```{r echo=FALSE}
+
+ggplot(loans, aes(ProsperRating..Alpha.)) +
+  geom_bar(aes(fill = as.character(loans$TotalProsperLoans)))
+
+```
+
+I wanted to see whether previous loans on the platform might affect the internal grading system Prosper uses, but nothing immediately stands out to me.
+
+### Loan Attributes
+
+```{r echo=FALSE}
+
+ggplot(loans, aes(BorrowerAPR)) + 
+  geom_histogram(binwidth = .005)
+
+```
+
+```{r echo=FALSE}
+
+ggplot(loans, aes(BorrowerRate)) + 
+  geom_histogram(binwidth = .005)
+
+```
+
+The borrower APR and Rate have similar distributions -- which makes sense, since they're related attributes of a loan. 
+
+```{r echo=FALSE}
+
+ggplot(loans, aes(MonthlyLoanPayment)) +
+  geom_histogram(binwidth = 10)
+
+sort(table(loans$MonthlyLoanPayment),decreasing=TRUE)[1:3]
+
+```
+
+Monthly loan payments skew toward lower, with a huge spike around $175. A $0 monthly payment is the second most frequent amount, which is anamalous, and suggests further scrubbing should be completed. However, I imagine that there's a reason the Prosper system includes $0 monthly payments at all. It's possible it indicates something particular about these entities that requires specific domain knowledge to interpret.
+
+```{r echo=FALSE}
+
+ggplot(loans, aes(Investors)) +
+  geom_histogram(binwidth = 1)
+
+```
+
+Holy cannoli, bat-related superhero! A massively predominant number of loans have a single lender. This feature belies the implicit promise of the Prosper lending platform: 'crowd-sourced' borrowing. I'm curious about who the investors are, as Prosper is starting to seem more and more like a traditional financial institution rather that a fresh take on the trillion dollar wealth transfer.
+
+Still, it'd be interesting to see what the distribution looks like in more detail.
+
+```{r echo=FALSE}
+
+ggplot(loans, aes(loans$Investors)) +
+  geom_histogram(binwidth = 1) +
+  scale_x_continuous(limits = c(2, 400))
+
+```
+
+```{r echo=FALSE}
+
+ggplot(loans, aes(Term)) +
+  geom_histogram(binwidth = 1)
+
+unique(loans$Term)
+
+```
+
+The platform allows 1, 3, and 5 year loans.
+
+```{r echo=FALSE}
+
+ggplot(loans, aes(loans$LoanOriginalAmount)) +
+  geom_histogram(binwidth = 500)
+
+```
+
+I thought about running this chart with a binwidth of 50, but 500 makes a more reasonable graph while still highlighting an important feature of the original loan amounts: they spike around even numbers, and especially the thousands mark. An interesting point to note is that Prosper has a minimum loan amount of $2000.
+
+
+# Bivariate Plots Section
+
+```{r echo=FALSE}
+
+subset <- c("LoanOriginalAmount", "BorrowerAPR", "BorrowerRate", "Investors", 
+              "MonthlyLoanPayment", "CreditScoreRangeLower", 
+              "DebtToIncomeRatio")
+
+ggpairs(loans[subset])
+
+```
+
+This pairwise comparison chart shows some interesting features of the data that I'll explore in more depth independently. Important to note are the relationship between APR and Rate and OriginalAmount and MonthlyPayment
+
+```{r echo=FALSE, Bivariate_Plots}
+
+ggplot(data=loans, aes(as.character(Term), LoanOriginalAmount)) +
+      geom_boxplot()
+
+```
+
+Not unexpectedly, a larger loan tends to have a longer term.
+
+```{r echo=FALSE, }
+
+ggplot(loans, aes(MonthlyLoanPayment, LoanOriginalAmount)) + 
+  geom_point(alpha = 0.075) +
+  geom_smooth(method = lm)
+
+```
+
+Again unsurprisingly, a larger loan typically involves a larger monthly payment. This makes intuitive and anecdotal sense, but it's good to see it in the data.
+
+```{r echo=FALSE}
+
+ggplot(data=loans, aes(IncomeRange, LoanOriginalAmount)) +
+      geom_boxplot()
+
+```
+We can see, too, that higher earners take larger loans on average, although the variability of the loan amount also tends to increase.
+
+
+```{r echo=FALSE}
+
+ggplot(data=loans, aes(factor(ProsperRating..Alpha.), BorrowerAPR)) +
+      geom_boxplot()
+
+```
+
+APR decreases as Prosper score improves. I understand this tendency to be a way to defray lending to high-risk borrowers. I'd be interested in exploring whether the assigned rating -- and implicitly the APR -- affects the rate of default in higher risk populations. I think this would need to be designed as a controlled experiment.
+
+```{r echo=FALSE}
+
+ggplot(data=loans, aes(factor(ProsperRating..Alpha.), LoanOriginalAmount)) +
+      geom_boxplot()
+
+```
+What's most interesting to me about this chart is not that the median amount seems to level out around $10k, but that the spread of the loan amount does as well. This could be indicative of the increased number of successful borrowers with higher ratings, but it suggests to me that rating isn't necessarily correlated with the amounts people want to borrow.
+
+```{r echo=FALSE}
+
+ggplot(data=loans, aes(IncomeRange, BorrowerAPR)) +
+      geom_boxplot()
+
+```
+
+A higher income range trends toward a lower APR. Curiously, people without an income have a low APR?
+
+```{r echo=FALSE}
+
+ggplot(data=loans, aes(IncomeRange, CreditScoreRangeLower)) +
+      geom_boxplot()
+
+unique(loans$CreditScoreRangeLower)
+
+```
+This chart was a quick check to confirm my earlier instincts about credit scores. Neither variability nor median appear that different for the credit score range across income categories.
+
+
+
+```{r echo=FALSE, }
+
+ggplot(loans, aes(BorrowerAPR, BorrowerRate)) + 
+  geom_point(alpha = 0.01)
+
+```
+The nearly 1:1 relationship between these merely indicates they're essentially the same feature for analysis.
+
+```{r echo=FALSE, }
+
+ggplot(loans, aes(BorrowerAPR, LoanOriginalAmount)) + 
+  geom_point(alpha = 0.01) +
+  geom_jitter(alpha = 0.03) +
+  geom_smooth(method = lm)
+
+```
+
+An interesting feature of this chart is that you can see the frequent loan amounts stand out in the noise. Still, a lower loan correlates with a higher APR.
+
+```{r echo=FALSE, }
+
+ggplot(loans, aes(BorrowerAPR, MonthlyLoanPayment)) + 
+  geom_point(alpha = 0.01) +
+  geom_smooth(method = lm)
+
+```
+The really interesting part of this chart is that the regression line shows a negative correlation (higher APR for lower monthly payment), but visually you might interpret the opposite.
+
+# Bivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the \
+investigation. How did the feature(s) of interest vary with other features in \
+the dataset?
+
+My analysis/charts show some fairly standard features of the data that you might expect from financial data: higher incomes tend to lead to larger loans and better scores; larger loans tend to lead to better rates; and higher incomes tend to have better rates. You should expect this kind of interpretation from financial data since people with more income are generally favored by our financial systems over the disenfranchised.
+
+
+# Multivariate Plots Section
+
+```{r echo=FALSE}
+
+ggpairs(loans[subset], aes(alpha = 0.05, color = as.character(loans$Term)))
+
+```
+
+Adding term to the pairwise comparison reveals some interesting features that I'll explore in depth.
+
+```{r echo=FALSE, }
+
+ggplot(loans, aes(BorrowerAPR, LoanOriginalAmount)) + 
+  geom_point(alpha = 0.1, aes(color = as.character(loans$Term))) +
+  geom_jitter(alpha = 0.03) +
+  geom_smooth(method = lm)
+
+```
+
+To me, this chart illuminates that term doesn't really impact APR or Origination Amount: no color is really distinct in the chart.
+
+```{r echo=FALSE, }
+
+ggplot(loans, aes(BorrowerAPR, LoanOriginalAmount)) + 
+  geom_point(alpha = 0.1, aes(color = factor(loans$IncomeRange))) +
+  scale_color_discrete() + 
+  geom_smooth(method = lm) +
+  labs(color = "Income", x = "APR", y = "Loan Amount")
+
+```
+
+While not a color-blind friendly graph, this chart shows some clusters in the data. The cooler colors are higher income, and tend toward larger loans and lower APRs.  The most prominent color is in the $50-75k range, chilling around the regression line.
+
+```{r echo=FALSE, }
+
+ggplot(loans, aes(MonthlyLoanPayment, LoanOriginalAmount)) + 
+  geom_point(alpha = 0.1, aes(color = factor(loans$Term))) +
+  scale_color_discrete() + 
+  geom_smooth(method = lm) +
+  labs(color = "Term", x = "Loan Payment", y = "Loan Amount")
+
+```
+The three distinct clusters of term are very interesting to me. There's definitely a strong relationship between the term, original amount, and the loan payment.  Obviously, the monthly payment increases with the loan amount, but the specific ratio between the two clearly varies by the specific term selected. This is pretty obvious if you've ever taken out a loan, but still fascinating to see in the data.
+
+```{r echo=FALSE, }
+
+ggplot(loans, aes(MonthlyLoanPayment, LoanOriginalAmount)) + 
+  geom_point(alpha = 0.1, aes(color = factor(loans$IncomeRange))) +
+  scale_color_discrete() + 
+  geom_smooth(method = lm) +
+  labs(color = "Income", x = "Loan Payment", y = "Original Loan Amount")
+
+```
+
+The same branches of payment to loan amount appear here, but there don't seem to clear clusters. There is a gradual increase of loan amount as income increases, something we learned earlier.
+
+```{r echo=FALSE, }
+
+ggplot(loans, aes(MonthlyLoanPayment, DebtToIncomeRatio)) + 
+  geom_point(alpha = 0.1, aes(color = factor(loans$Term))) +
+  scale_color_discrete() + 
+  geom_smooth(method = lm) +
+  labs(color = "Term", x = "Loan Payment", y = "Debt to Income")
+
+```
+Unlike total loan amount, debt to income ratio doesn't stand out as much for the selected term.
+
+```{r echo=FALSE, }
+
+ggplot(loans, aes(MonthlyLoanPayment, DebtToIncomeRatio)) + 
+  geom_point(alpha = 0.1, aes(color = factor(loans$IncomeRange))) +
+  scale_color_discrete() + 
+  geom_smooth(method = lm) +
+  labs(color = "Income", x = "Loan Payment", y = "Debt to Income")
+
+```
+
+This is a really fascinating chart to me. Several groupings stand out pretty phenomenally. There's a sharply distinct tendency for higher income to have a lower debt to income ratio. The extreme cases of debt to income ratio are among lower income brackets or those unemployed.
+
+```{r echo=FALSE}
+
+ggplot(data=loans, aes(factor(ProsperRating..Alpha.), LoanOriginalAmount)) +
+      geom_boxplot()
+
+# add income as other dimension
+
+```
+
+# Multivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the \
+investigation. Were there features that strengthened each other in terms of \
+looking at your feature(s) of interest?
+
+Using term and income brackets was productive in pushing some of the correlations discovered in the data. The categorical attributes showed a few interesting features of the data.  The first was how clearly term indicated which of three relationships between loan amount and monthly payment.  The second, for me, was the relationship between income and debt to income ratio.
+
+------
+
+# Final Plots and Summary
+
+### Plot One
+```{r echo=FALSE, Plot_One}
+
+RatingColors <- c("NA"= "#8E8DA0", "HR" = "#A099FF", "E" = "#877FE5", "D" = "#6D66CC",
+            "C" = "#544CB2", "B" = "#3A3399", "A" = "#21197F", "AA" = "#070066")
+
+ggplot(data=loans, aes(year(LoanOriginationDate))) +
+    geom_bar(aes(fill = loans$ProsperRating..Alpha.)) +
+    scale_fill_manual(values = RatingColors) +
+    scale_y_continuous(name = "Count (thousands)", 
+                       labels = function(y) y/1000) +
+    scale_x_continuous(breaks = c(2007, 2009, 2011, 2013),
+                       limits = c(2005, 2015)) +
+    labs(title = "Count of Loans over Time, with an Emphasis on Prosper Score",
+         fill = "Prosper Score", x = "Origination Date")
+
+```
+
+### Description One
+This chart demonstrates the distribution of the Prosper rating score as a proportion of the total loans in a given year. This chart tells us several important and suggestive features of the data.  First, Prosper did not begin using this rating system until 2009, a year with a comparative dearth of loans on the platform.  What this suggests to me, with only general contextual knowledge, is that Prosper re-evaluated its rating system in the wake of the financial crisis and the Great Recession -- although I should be careful to note that you cannot conclude that from this chart.
+
+Secondly, using 2013 as an example year, the distribution of ratings across the loans looks to be normalized. This speaks to how a credit rating is intended to be a standardized measure to evaluate a borrower. It's a rating to categorize and label a person based on the articial measurement assigned and creating by the investing class. You could speculate that toward the lower end of the scale more loans are denied, toward the higher less are needed; regardless, what is clear is credit score isn't necessarily a disqualifying measure to receive a loan. However, one might presume that it influences other attributes of the loan.
+
+### Plot Two
+```{r echo=FALSE, Plot_Two}
+
+ggplot(data=loans, aes(factor(ProsperRating..Alpha.), BorrowerAPR)) +
+      geom_boxplot(fill = "white", outlier.alpha = 0.05) +
+      labs(title = "Distribution of APR by Prosper Rating",
+           y = "APR", x = "Prosper Rating")
+
+```
+
+### Description Two
+As we can clearly see in this chart, people with higher credit ratings tend toward lower APRs. There are numerous factors influencing this relationship: the attributes of a loan  determine the APR, generally according to the formula and variables of the lending financial institution. The best takeaway of this relationship, in my mind, is not that a higher Prosper rating leads to a lower APR, but rather that people who have higher Prosper ratings tend to select loans with a lower APR.
+
+### Plot Three
+```{r echo=FALSE, Plot_Three}
+
+ggplot(loans, aes(BorrowerAPR, EstimatedEffectiveYield)) + 
+  geom_point(alpha = 0.1, aes(color = ProsperRating..Alpha.,
+                              size = LoanOriginalAmount)) + 
+  geom_smooth(method = lm) +
+  scale_color_manual(values = RatingColors) +
+  labs(title = "Relationship between Estimated Yield and APR", 
+       y = "Estimated Yield", x = "APR",
+       color = "Prosper Rating", size = "Loan Amount")
+  
+```
+
+### Description Three
+This plot shows a positive correlation between APR and estimated yield: that is, as the APR on a loan increases, so does the investor's return. To state that again, a lower Prosper rating tends toward a higher yield for investors. You can see in scale of the color that higher ratings are clustered together, tending to gravitate toward lower ratings the higher the APR. Read with the earlier two charts, this seems a fairly obvious conclusion to draw: higher rated borrowers tend to choose (or be approved for) a lower APR, and the distribution of ratings tends to be fairly normalized. The amount of the loan doesn't seem to be indicative of any of the other factors in the plot.
+
+------
+
+# Reflection
+
+This dataset left me with a lot of questions, some from a data architecture perspective and some from a more sociopolitical one.  Prosper has clearly changed several features of their platform over the past decade, the primary which being how borrowers are graded.  This dataset was scrubbed so that it cannot be personally identifying, which is an important analytical standard for open datasets. However, it would be fascinating to know certain demographic could contextualize the dataset. For instance, who are the repeat borrowers? What other attributes in the data have changed over time, and how should that impact wrangling the data for more sophisticated analysis or engineering?
+
+THe other direction of questions I have are related to the justness of Prosper as a lending platform. Are the fees and rating systems and various mechanisms surrounding the financial sector damaging to those who might take out loans? A more tailored analysis might be able to tease out the details of how the various attributes of a loan relate to the chance of default -- and how that affects a person's Prosper rating, and potentially their credit score, all while highlighting the vicious cycle which likely doesn't expose the investors to much risk.
